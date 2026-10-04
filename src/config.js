@@ -120,6 +120,11 @@ export const CFG = {
   // PHANTOM ZONE: past fromM everything of the Black Zone stays (darkness, lantern, outlines) and a black hole
   // hangs behind the level. Every few seconds it pulls: first a telegraphed warning (no force), then a sideways pull
   // toward the hole that can be countered by tapping away from it. The level layout itself is unchanged.
+  // Ads. These are Google's public TEST ids; swap for the real ids (and set testing:false) after the AdMob account exists.
+  ads: {
+    testing: true,
+    rewardedId: 'ca-app-pub-3940256099942544/5224354917',
+  },
   phantomZone: {
     fromM: PZ_FROM_M,
     fadeM: 60,            // the hole fades in over this many metres BEFORE fromM

@@ -1,9 +1,14 @@
+import '@fontsource/fredoka/latin-500.css';
+import '@fontsource/fredoka/latin-700.css';
 import Phaser from 'phaser';
 import { CFG } from './config.js';
+import { AdService } from './services/ad.js';
 import { BootScene } from './scenes/Boot.js';
 import { GameScene } from './scenes/Game.js';
 import { MenuScene } from './scenes/Menu.js';
 import { SplashScene } from './scenes/Splash.js';
+
+AdService.warmUp();
 
 const game = new Phaser.Game({
   type: Phaser.AUTO,
