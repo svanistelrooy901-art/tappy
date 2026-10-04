@@ -124,6 +124,8 @@ export const CFG = {
   ads: {
     testing: true,
     rewardedId: 'ca-app-pub-3940256099942544/5224354917',
+    loadTimeoutS: 8,      // how long a player waits for a not-yet-loaded ad before we give up (no penalty)
+    retryS: 15,           // after a failed background load, try again after this long
   },
   phantomZone: {
     fromM: PZ_FROM_M,

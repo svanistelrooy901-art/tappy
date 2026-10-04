@@ -53,6 +53,8 @@ export class UIScene extends Phaser.Scene {
     return o;
   }
   hideOverlay() {
+    this.overlayCleanup?.();
+    this.overlayCleanup = null;
     this.ov?.forEach((o) => o.destroy());
     this.ov = [];
     this.buttons = [];

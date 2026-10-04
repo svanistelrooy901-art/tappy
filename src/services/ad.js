@@ -14,6 +14,9 @@ const isNative = () => typeof window !== 'undefined' && !!window.Capacitor?.isNa
 
 let admob = null; // the plugin module, loaded lazily so the web build never needs it
 let initPromise = null;
+let ready = false; // a rewarded ad is loaded and can be shown instantly
+let loadP = null; // the load in flight, shared by everyone who needs the ad
+let retryTimer = null;
 
 async function initAdMob() {
   if (initPromise) return initPromise;
@@ -30,9 +33,45 @@ async function initAdMob() {
   return initPromise;
 }
 
+// Load the next rewarded ad in the background so it is ready BEFORE the player asks for it.
+// A failed load retries quietly (slow networks), never more often than CFG.ads.retryS.
+function load() {
+  if (ready) return Promise.resolve(true);
+  if (loadP) return loadP;
+  loadP = (async () => {
+    if (!(await initAdMob())) return false;
+    try {
+      await admob.AdMob.prepareRewardVideoAd({ adId: CFG.ads.rewardedId, isTesting: CFG.ads.testing });
+      ready = true;
+      return true;
+    } catch (e) {
+      console.warn('AdMob load failed', e);
+      return false;
+    }
+  })().then((ok) => {
+    loadP = null;
+    if (!ok && !retryTimer) {
+      retryTimer = setTimeout(() => { retryTimer = null; load(); }, CFG.ads.retryS * 1000);
+    }
+    return ok;
+  });
+  return loadP;
+}
+
+const sleep = (ms, v) => new Promise((r) => setTimeout(() => r(v), ms));
+
 // Show one rewarded ad via AdMob. Resolves rewarded=true only on the network's Rewarded event.
-async function showAdMob() {
-  if (!(await initAdMob())) return { rewarded: false, txId: null, reason: 'init' };
+// opts.isCancelled(): checked after waiting for the load, so a cancelled request never pops an ad later.
+// opts.onShow(): called right before the ad goes on screen (the scene hides its "loading" card then).
+async function showAdMob(opts = {}) {
+  if (!ready) {
+    // not preloaded (first run, slow network): wait for it, but never forever
+    const got = await Promise.race([load(), sleep(CFG.ads.loadTimeoutS * 1000, 'timeout')]);
+    if (got === 'timeout') return { rewarded: false, txId: null, reason: 'timeout' };
+    if (!got) return { rewarded: false, txId: null, reason: 'fail' };
+  }
+  if (opts.isCancelled?.()) return { rewarded: false, txId: null, reason: 'cancel' };
+
   const { AdMob, RewardAdPluginEvents } = admob;
   const handles = [];
   let earned = false;
@@ -41,13 +80,13 @@ async function showAdMob() {
       const on = async (ev, fn) => handles.push(await AdMob.addListener(ev, fn));
       on(RewardAdPluginEvents.Rewarded, () => { earned = true; });
       on(RewardAdPluginEvents.Dismissed, () => resolve('dismissed'));
-      on(RewardAdPluginEvents.FailedToLoad, () => resolve('fail'));
       on(RewardAdPluginEvents.FailedToShow, () => resolve('fail'));
     });
-    await new Promise((r) => setTimeout(r, 0)); // let the listeners register
-    await AdMob.prepareRewardVideoAd({ adId: CFG.ads.rewardedId, isTesting: CFG.ads.testing });
+    await sleep(0); // let the listeners register
+    ready = false; // this ad is spent whatever happens
+    opts.onShow?.();
     AdMob.showRewardVideoAd().catch(() => {});
-    const how = await Promise.race([done, new Promise((r) => setTimeout(() => r('timeout'), 90000))]);
+    const how = await Promise.race([done, sleep(90000, 'timeout')]);
     if (earned) {
       txCounter += 1;
       return { rewarded: true, txId: `admob-${Date.now()}-${txCounter}` };
@@ -58,6 +97,8 @@ async function showAdMob() {
     return { rewarded: false, txId: null, reason: 'fail' };
   } finally {
     handles.forEach((h) => h?.remove?.());
+    ready = false;
+    setTimeout(load, 800); // queue the next one
   }
 }
 
@@ -70,13 +111,18 @@ export const AdService = {
     outcome: null,
   },
 
-  // call once at app start so the first ad is not slowed by SDK start-up
+  // call at app start and at the start of each run: loads the ad in the background
   warmUp() {
-    if (isNative()) initAdMob();
+    if (isNative()) load();
   },
 
-  async showRewarded() {
-    if (isNative()) return showAdMob();
+  // true when showRewarded() will start instantly (always true for the mock)
+  isReady() {
+    return isNative() ? ready : true;
+  },
+
+  async showRewarded(opts = {}) {
+    if (isNative()) return showAdMob(opts);
     const result = this.mock.outcome ? await this.mock.outcome() : 'complete';
     if (result === 'complete') {
       txCounter += 1;

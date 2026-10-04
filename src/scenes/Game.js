@@ -66,7 +66,7 @@ export class GameScene extends UIScene {
     const seedParam = new URLSearchParams(location.search).get('seed');
     this.startRun(seedParam ? Number(seedParam) : undefined);
 
-    window.__tappy = { scene: this };
+    window.__tappy = { scene: this, ad: AdService };
   }
 
   applyCam() {
@@ -165,6 +165,7 @@ export class GameScene extends UIScene {
     this.bannerObjs?.forEach((o) => o.destroy());
     this.bannerObjs = null;
     this.hideOverlay();
+    AdService.warmUp(); // have the next rewarded ad loaded before the player could ever need it
     this.platforms = [];
     this.hazards = [];
     this.coins = [];
@@ -368,7 +369,11 @@ export class GameScene extends UIScene {
     this.hideOverlay();
     this.phase = 'AD';
     AdService.mock.outcome = () => this.showMockAd();
-    const res = await AdService.showRewarded();
+    // slow network: the ad may not be loaded yet. Show a "loading" card (with Cancel) instead of a frozen screen.
+    let cancelled = false;
+    if (!AdService.isReady()) this.showAdLoading(() => { cancelled = true; });
+    const res = await AdService.showRewarded({ isCancelled: () => cancelled, onShow: () => this.hideOverlay() });
+    if (cancelled) { this.phase = 'OVER'; this.showGameOver(); return; }
     this.hideOverlay();
     if (res.rewarded && this.run.canNormalRevive) {
       this.run.normalReviveUsed = true;
@@ -379,7 +384,7 @@ export class GameScene extends UIScene {
       this.updateHud();
     } else {
       this.phase = 'OVER';
-      this.showGameOver(res.reason === 'fail' ? 'Ad unavailable. No penalty.' : 'No reward. No penalty.');
+      this.showGameOver(res.reason === 'fail' || res.reason === 'timeout' ? 'Ad not available. No penalty.' : 'No reward. No penalty.');
     }
   }
 
@@ -488,6 +493,23 @@ export class GameScene extends UIScene {
       this.showPause();
     });
     this.button('Quit to menu', W / 2, top + 296, 230, 46, 'pink', () => this.toMenu());
+  }
+
+  // shown while a rewarded ad is still loading (slow connection): animated, honest, and cancellable
+  showAdLoading(onCancel) {
+    const cardH = 250;
+    const top = H / 2 - cardH / 2;
+    this.panel(300, cardH);
+    this.ovText(W / 2, top + 44, 'LOADING AD', 22, '#ffffff');
+    const dots = this.ovText(W / 2, top + 92, '. . .', 30, '#ffd86a');
+    const slow = this.ovText(W / 2, top + 136, '', 12, '#b9aef5', 500);
+    let n = 0;
+    const tick = this.time.addEvent({
+      delay: 350, loop: true,
+      callback: () => { n++; dots.setText('. '.repeat((n % 3) + 1).trim()); if (n === 8) slow.setText('Slow connection. Hang on a moment...'); },
+    });
+    this.overlayCleanup = () => tick.remove();
+    this.button('Cancel', W / 2, top + 196, 200, 44, 'ghost', () => { tick.remove(); onCancel(); });
   }
 
   // QA-friendly stand-in for a real rewarded ad: every outcome path is testable.
