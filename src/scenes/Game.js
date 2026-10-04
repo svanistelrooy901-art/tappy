@@ -11,6 +11,7 @@ import { zoneOf } from '../core/physics.js';
 import { PLAT_H, PLAT_TOP, platformKey, uiPanelKey } from '../art_hd.js';
 import { Save } from '../services/save.js';
 import { AdService } from '../services/ad.js';
+import { Online } from '../services/online.js';
 import { sfx, unlockAudio, vibrate } from '../services/sfx.js';
 
 const { W, H, Z } = CFG;
@@ -172,7 +173,15 @@ export class GameScene extends UIScene {
     this.sim = null;
     this.applyCam();
 
-    const s = seed ?? Math.floor(Math.random() * 2 ** 31);
+    // A registered player's run uses a server-issued seed when one is cached (a "ranked" run); otherwise a local random seed.
+    let s = seed;
+    this.seedToken = null;
+    if (s == null) {
+      const ranked = Online.takeSeed();
+      if (ranked) { s = ranked.seed; this.seedToken = ranked.token; } else s = Math.floor(Math.random() * 2 ** 31);
+    }
+    this.settled = false;
+    if (Online.profile) { Online.flush(); Online.refreshThresholds(); }
     this.sim = new RunSim(s, this.simHooks());
     this.run = this.sim.run;
     this.gen = this.sim.gen;
@@ -356,7 +365,7 @@ export class GameScene extends UIScene {
     return Save.commitRun(this.run);
   }
 
-  async tryRevive() {
+  async tryRevive(kind = 'ad') {
     // Normal rewarded revive. Granted ONLY after the ad service confirms the reward.
     this.hideOverlay();
     this.phase = 'AD';
@@ -367,8 +376,9 @@ export class GameScene extends UIScene {
     const res = await AdService.showRewarded({ isCancelled: () => cancelled, onShow: () => this.hideOverlay() });
     if (cancelled) { this.phase = 'OVER'; this.showGameOver(); return; }
     this.hideOverlay();
-    if (res.rewarded && this.run.canNormalRevive) {
-      this.sim.revive('ad');
+    const allowed = kind === 'ad' ? this.run.canNormalRevive : !this.run.competitiveReviveUsed[kind];
+    if (res.rewarded && allowed) {
+      this.sim.revive(kind);
       sfx.revive();
       this.phase = 'PLAY';
       this.updateHud();
@@ -415,7 +425,9 @@ export class GameScene extends UIScene {
     const canRevive = run.canNormalRevive;
     const coinCost = CFG.coinRevive.cost;
     const canCoinRevive = run.canCoinRevive && Save.data.wallet + run.coins >= coinCost;
-    const offer = canRevive || canCoinRevive;
+    // V1.1: once the generic revives are out of the picture, a run that died close to a leaderboard milestone may get an ad revive
+    const ms = !canRevive && !canCoinRevive ? Online.milestoneOffer(run) : null;
+    const offer = canRevive || canCoinRevive || !!ms;
     const cardH = offer ? 452 : 382;
     const top = H / 2 - cardH / 2;
     this.panel(300, cardH);
@@ -425,8 +437,10 @@ export class GameScene extends UIScene {
     this.ovText(W / 2, top + 170, newBest ? 'NEW BEST!' : `Best  ${Save.data.best} m`, newBest ? 18 : 15, newBest ? '#ffd86a' : '#b9aef5');
     const earned = this.ovText(W / 2 + 12, top + 202, `+${run.coins}`, 18, '#ffd86a');
     this.addOv(this.add.image(W / 2 + 12 - earned.width / 2 - 16, top + 202, 'coin').setScale(HD));
+    // leaderboard line (filled in when the server has verified the run)
+    this.rankText = this.ovText(W / 2, top + 232, '', 13, '#7dffb0', 600);
 
-    let y = top + 258;
+    let y = top + 262;
     if (canRevive) {
       this.button('Revive  (watch ad)', W / 2, y, 244, 54, 'blue', () => this.tryRevive());
       this.ovText(W / 2, y + 38, 'optional. restarting is always free', 11, '#9d92d8', 500);
@@ -436,19 +450,48 @@ export class GameScene extends UIScene {
       this.addOv(this.add.image(W / 2 + b.t.width / 2 + 16, y - 1, 'coin').setScale(HD));
       this.ovText(W / 2, y + 38, 'optional. uses coins. restarting is free', 11, '#9d92d8', 500);
       y += 82;
+    } else if (ms) {
+      this.button(`Chase ${ms.label}  (watch ad)`, W / 2, y, 244, 54, 'blue', () => this.tryRevive(ms.kind));
+      this.ovText(W / 2, y + 38, `${ms.label} is just ${Math.ceil(ms.need - run.maxHeightM)} m away`, 11, '#ffd86a', 600);
+      y += 82;
     } else {
-      this.commitRun();
+      this.settleRun();
     }
     this.button('Play again', W / 2, y, 244, 58, 'green', () => {
-      this.commitRun();
+      this.settleRun();
       this.startRun();
     });
     this.button('Menu', W / 2, y + 62, 244, 42, 'ghost', () => this.toMenu());
     if (note) this.ovText(W / 2, y + 100, note, 12, '#ffb3c1', 500);
+    this.showRankLine();
+  }
+
+  // The run is final (no more revive on offer, or the player is leaving): bank the coins and submit it for ranking, once.
+  settleRun() {
+    if (this.settled) return;
+    this.settled = true;
+    this.commitRun();
+    if (!this.seedToken || !this.sim.over) return; // an unranked run (not registered, offline seed, or a test seed)
+    const replay = this.sim.exportReplay();
+    this.rankResult = undefined;
+    Online.submit(replay, this.seedToken).then((r) => {
+      this.rankResult = r;
+      this.showRankLine();
+    });
+  }
+
+  showRankLine() {
+    const t = this.rankText;
+    if (!t || !t.active) return;
+    const r = this.rankResult;
+    if (r && r.accepted && r.rank) t.setText(`Rank #${r.rank} worldwide${r.newBest ? '  ·  new personal best' : ''}`).setColor('#7dffb0');
+    else if (!Online.profile && this.settled) t.setText('Join the ranks from the menu').setColor('#9d92d8').setFontSize(11);
+    else if (Online.profile && this.settled && !this.seedToken) t.setText('Not ranked (no connection at start)').setColor('#9d92d8').setFontSize(11);
   }
 
   toMenu() {
-    this.commitRun();
+    if (this.sim.over) this.settleRun();
+    else this.commitRun(); // quitting mid-run from the pause menu: coins are kept, but an unfinished run is never submitted
     this.phase = 'LEAVING';
     this.cameras.main.fadeOut(160, 10, 6, 32);
     this.time.delayedCall(170, () => this.scene.start('Menu'));

@@ -43,6 +43,9 @@ export const CFG = {
   spawnProtect: 1.2,      // after respawn
   reviveProtect: 2.0,     // after a rewarded revive
   reviveLives: 1,         // lives granted by a normal rewarded revive
+  // Leaderboard server. Empty = the built-in TEST backend (stored on the device, labelled in the UI). Override: ?api=https://...
+  api: { url: (typeof location !== 'undefined' && new URLSearchParams(location.search).get('api')) || '', timeoutMs: 10000 },
+  competitiveRevive: { lives: 1, nearPct: 0.9 }, // V1.1: ad-only revive once per leaderboard milestone (Top 10, Top 5, #1), offered from 90% of the height needed
   coinRevive: { cost: 1000, lives: 1 }, // second revive, only after the ad revive is used; paid with coins (1000 coins = RM 1.00 hidden value)
   normalReviveMax: 1,
   airSpawnHold: 0.6,      // seconds a mid-air respawn hovers before gravity resumes

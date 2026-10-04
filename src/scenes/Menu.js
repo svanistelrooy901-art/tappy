@@ -8,6 +8,8 @@ import { StoreService } from '../services/store.js';
 import { CFG } from '../config.js';
 import { Save } from '../services/save.js';
 import { sfx } from '../services/sfx.js';
+import { Online, flagOf } from '../services/online.js';
+import { openJoin, showRecoveryCode } from '../ui/join.js';
 
 const { W, H } = CFG;
 const tintOf = (skin) => parseInt((SKINS[skin] || SKINS.default).body.slice(1), 16);
@@ -77,7 +79,7 @@ export class MenuScene extends UIScene {
 
     const row = [
       ['ic_settings', 'Settings', () => this.showSettings()],
-      ['ic_ranks', 'Ranks', () => this.toast('Global ranks are coming soon')],
+      ['ic_ranks', 'Ranks', () => this.showRanks()],
       ['ic_wardrobe', 'Wardrobe', () => this.showWardrobe()],
       ['ic_shop', 'Shop', () => this.toast('The shop is coming soon')],
     ];
@@ -88,7 +90,8 @@ export class MenuScene extends UIScene {
   // ------------------------------------------------------------------ settings
   showSettings() {
     const st = Save.data.settings;
-    const cardH = 300;
+    const prof = Online.profile;
+    const cardH = prof ? 362 : 300;
     const top = H / 2 - cardH / 2;
     this.panel(290, cardH);
     this.view = 'settings';
@@ -103,7 +106,72 @@ export class MenuScene extends UIScene {
       Save.flush();
       this.showSettings();
     });
-    this.button('Close', W / 2, top + 244, 230, 48, 'green', () => this.showHome());
+    if (prof) {
+      this.button('Recovery code', W / 2, top + 228, 230, 48, 'ghost', () => showRecoveryCode({ profile: prof, onDone: () => {} }));
+      this.ovText(W / 2, top + 262, `${flagOf(prof.country)}  ${prof.nickname}`, 12, '#9d92d8', 500);
+    }
+    this.button('Close', W / 2, top + cardH - 56, 230, 48, 'green', () => this.showHome());
+  }
+
+  // ------------------------------------------------------------------ ranks (global, all time)
+  showRanks(page = 0) {
+    this.panel(0, 0, H / 2, 0);
+    this.view = 'ranks';
+    this.rankPage = page;
+    const PAGE = 10;
+    this.iconButton('ic_back', 32, 40, 54, () => this.showHome());
+    this.ovText(W / 2 - 4, 40, 'RANKS', 22, '#ffffff');
+    this.ovText(W / 2, 74, Online.isMock ? 'Global  ·  all time  ·  TEST BOARD' : 'Global  ·  all time', 12, '#b9aef5', 500);
+    const loading = this.ovText(W / 2, 250, 'Loading...', 16, '#b9aef5', 500);
+    const token = (this.ranksToken = (this.ranksToken || 0) + 1);
+    Online.board(PAGE, page * PAGE).then((r) => {
+      if (this.view !== 'ranks' || token !== this.ranksToken) return; // the player moved on
+      loading.destroy();
+      if (!r.ok) {
+        this.ovText(W / 2, 230, "Can't reach the leaderboard", 16, '#ffb3c1', 500);
+        this.ovText(W / 2, 256, 'Check your internet connection', 12, '#9d92d8', 500);
+        this.button('Try again', W / 2, 310, 200, 46, 'blue', () => this.showRanks(page));
+        return;
+      }
+      const me = r.me;
+      r.entries.forEach((e, i) => {
+        const y = 106 + i * 33;
+        const mine = Online.profile && e.nickname === Online.profile.nickname;
+        if (mine) this.addOv(this.add.image(W / 2, y, uiPanelKey(this, 326, 30, 12)).setScale(HD));
+        const col = e.rank === 1 ? '#ffd86a' : e.rank === 2 ? '#dfe6f5' : e.rank === 3 ? '#ffb27a' : '#b9aef5';
+        this.ovText(34, y, String(e.rank), 14, col, 700);
+        this.ovText(60, y, flagOf(e.country), 16, '#ffffff', 500);
+        const nm = this.ovText(84, y, e.nickname, 15, mine ? '#7dffb0' : '#ffffff', 600);
+        nm.setOrigin(0, 0.5);
+        const ht = this.ovText(W - 24, y, `${e.heightM} m`, 14, '#ffd86a', 700);
+        ht.setOrigin(1, 0.5);
+      });
+      if (!r.entries.length) this.ovText(W / 2, 250, 'No one is ranked yet. Be the first!', 14, '#b9aef5', 500);
+      // paging
+      const pages = Math.max(1, Math.ceil((r.total ?? (page + 1) * PAGE + (r.entries.length === PAGE ? 1 : 0)) / PAGE));
+      const py = 454;
+      if (page > 0) this.button('Prev', 70, py, 100, 38, 'ghost', () => this.showRanks(page - 1));
+      this.ovText(W / 2, py, `${page + 1}`, 14, '#b9aef5', 600);
+      if (r.entries.length === PAGE && page + 1 < pages) this.button('Next', W - 70, py, 100, 38, 'ghost', () => this.showRanks(page + 1));
+      // my row, pinned
+      if (me && me.rank) {
+        this.addOv(this.add.image(W / 2, 506, uiPanelKey(this, 326, 40, 14)).setScale(HD));
+        this.ovText(34, 506, `#${me.rank}`, 14, '#7dffb0', 700);
+        this.ovText(70, 506, flagOf(me.country), 16, '#ffffff', 500);
+        this.ovText(94, 506, me.nickname, 15, '#7dffb0', 600).setOrigin(0, 0.5);
+        this.ovText(W - 24, 506, `${me.heightM} m`, 14, '#ffd86a', 700).setOrigin(1, 0.5);
+      } else if (me) {
+        this.ovText(W / 2, 506, `${flagOf(me.country)}  ${me.nickname}: finish a ranked run to get on the board`, 12, '#b9aef5', 500);
+      }
+    });
+    if (!Online.profile) {
+      this.button('Join the ranks', W / 2, 566, 250, 54, 'green', () => this.joinFlow());
+      this.ovText(W / 2, 604, 'Choose a nickname and country to compete', 11, '#9d92d8', 500);
+    }
+  }
+
+  joinFlow() {
+    openJoin({ onDone: () => this.showRanks(), onCancel: () => {} });
   }
 
   // ------------------------------------------------------------------ wardrobe

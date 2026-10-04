@@ -44,7 +44,7 @@ ok(Save.data.wallet === 512 && Save.data.best === 150, 'run commit is idempotent
 // v1 save (before cosmetics) migrates without losing progress
 store['tappy.save'] = JSON.stringify({ v: 1, best: 321, wallet: 45, lastRunId: 'x', settings: { sound: false, haptics: true } });
 Save.load();
-ok(Save.data.v === 2 && Save.data.best === 321 && Save.data.wallet === 45 && Save.data.equipped === 'default' && Save.owns('default') && !Save.data.settings.sound, 'v1 save migrates');
+ok(Save.data.v === 3 && Save.data.best === 321 && Save.data.wallet === 45 && Save.data.equipped === 'default' && Save.owns('default') && !Save.data.settings.sound, 'v1 save migrates');
 
 // corrupt / tampered data falls back safely
 store['tappy.save'] = JSON.stringify({ v: 2, best: 'x', wallet: null, owned: ['red', 'ghost'], equipped: 'ghost' });

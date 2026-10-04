@@ -12,6 +12,10 @@ const H = CFG.H;
 // replays logs whose version it knows; old logs from old game versions are then rejected instead of mis-scored.
 export const SIM_VERSION = 1;
 
+// competitive revive kinds, one per leaderboard milestone
+export const MILESTONE_KINDS = { top10: 1, top5: 1, top1: 1 };
+export const REVIVE_KINDS = ['ad', 'coin', 'top10', 'top5', 'top1'];
+
 // THE authoritative simulation of one run. No Phaser, no DOM, no audio: the game scene drives it and draws what it
 // does, and the V1.1 server replays a recorded tap log through the very same class to verify a submitted score.
 // Everything that decides a score lives here; the scene only reacts through the optional `hooks`.
@@ -131,6 +135,11 @@ export class RunSim {
     if (kind === 'coin') {
       run.coinReviveUsed = true;
       run.lives = CFG.coinRevive.lives;
+    } else if (kind in MILESTONE_KINDS) {
+      // competitive revive (V1.1): an ad, once per milestone per run. Eligibility (within 90% of the milestone) is decided
+      // by the scene from the live leaderboard; the sim only enforces "once per milestone".
+      run.competitiveReviveUsed[kind] = true;
+      run.lives = CFG.competitiveRevive.lives;
     } else {
       run.normalReviveUsed = true;
       run.lives = CFG.reviveLives;
@@ -248,9 +257,11 @@ export function replayRun(rec, opts = {}) {
   }
   for (let i = 0; i < rec.revives.length; i++) {
     const r = rec.revives[i];
-    if (!Array.isArray(r) || !Number.isInteger(r[0]) || (r[1] !== 'ad' && r[1] !== 'coin')) return { ok: false, reason: 'revives' };
+    if (!Array.isArray(r) || !Number.isInteger(r[0]) || !REVIVE_KINDS.includes(r[1])) return { ok: false, reason: 'revives' };
     if (i > 0 && r[0] < rec.revives[i - 1][0]) return { ok: false, reason: 'revives' };
   }
+  // each kind at most once per run
+  if (new Set(rec.revives.map((r) => r[1])).size !== rec.revives.length) return { ok: false, reason: 'revives' };
   const applyTaps = () => {
     while (ti < taps.length && Math.floor(taps[ti] / 3) <= sim.tick) {
       if (Math.floor(taps[ti] / 3) < sim.tick) return false; // a tap that should already have happened
@@ -280,7 +291,7 @@ export function replayRun(rec, opts = {}) {
     ticks: sim.tick,
     heightM: Math.floor(sim.run.maxHeightM),
     coins: sim.run.coins,
-    revives: { ad: sim.run.normalReviveUsed, coin: sim.run.coinReviveUsed },
+    revives: { ad: sim.run.normalReviveUsed, coin: sim.run.coinReviveUsed, ...sim.run.competitiveReviveUsed },
     taps: taps.length,
   };
 }

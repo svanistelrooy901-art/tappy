@@ -4,7 +4,7 @@ import { SKIN_IDS, skinById } from '../data/cosmetics.js';
 const KEY = 'tappy.save';
 
 const DEFAULTS = () => ({
-  v: 2,
+  v: 3,
   best: 0,
   wallet: 0,
   lastRunId: null,
@@ -12,6 +12,9 @@ const DEFAULTS = () => ({
   equipped: 'default',
   txIds: [],
   settings: { sound: true, haptics: true },
+  profile: null, // V1.1 leaderboard identity: { playerId, token, nickname, country, recoveryCode }
+  seeds: [], // server-issued run seeds [{ seed, token, iat }]
+  pending: [], // finished runs waiting to be submitted [{ replay, seedToken }]
 });
 
 function migrate(d) {
@@ -22,7 +25,7 @@ function migrate(d) {
   if (!owned.includes('default')) owned.unshift('default');
   const equipped = owned.includes(d.equipped) ? d.equipped : 'default';
   return {
-    v: 2,
+    v: 3,
     best: Number.isFinite(d.best) ? d.best : 0,
     wallet: Number.isFinite(d.wallet) ? d.wallet : 0,
     lastRunId: typeof d.lastRunId === 'string' ? d.lastRunId : null,
@@ -30,6 +33,9 @@ function migrate(d) {
     equipped,
     txIds: Array.isArray(d.txIds) ? d.txIds.filter((t) => typeof t === 'string').slice(-50) : [],
     settings: { ...base.settings, ...(d.settings || {}) },
+    profile: d.profile && typeof d.profile.token === 'string' && typeof d.profile.nickname === 'string' ? { playerId: String(d.profile.playerId), token: d.profile.token, nickname: d.profile.nickname, country: String(d.profile.country), recoveryCode: String(d.profile.recoveryCode || '') } : null,
+    seeds: Array.isArray(d.seeds) ? d.seeds.filter((x) => x && Number.isInteger(x.seed) && typeof x.token === 'string').slice(0, 10) : [],
+    pending: Array.isArray(d.pending) ? d.pending.filter((x) => x && x.replay && typeof x.seedToken === 'string').slice(0, 5) : [],
   };
 }
 

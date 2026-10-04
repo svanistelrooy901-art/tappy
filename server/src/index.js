@@ -138,7 +138,7 @@ async function submitScore(request, env, player) {
   if (t - s.iat > SEED_TTL_S) return fail('seed_expired');
   const rec = b.replay;
   if (!rec || rec.seed !== s.seed) return fail('seed_mismatch');
-  if (!Array.isArray(rec.taps) || !Array.isArray(rec.revives) || rec.revives.length > 2) return fail('replay_format');
+  if (!Array.isArray(rec.taps) || !Array.isArray(rec.revives) || rec.revives.length > 5) return fail('replay_format');
 
   // plausibility, cheap checks first
   for (let i = 1; i < rec.taps.length; i++) if (Math.floor(rec.taps[i] / 3) - Math.floor(rec.taps[i - 1] / 3) < MIN_TAP_GAP_TICKS) return fail('tap_rate');

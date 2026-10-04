@@ -75,6 +75,25 @@ for (const [i, seed] of [7, 104729, 2718281, 31337, 99991, 123456789, 42, 867530
   ok(!e.ok && e.reason === 'unfinished', 'no taps: the alien just stands there, so an unfinished run is rejected');
 }
 
+// 3b. competitive revives: allowed kinds, once each
+{
+  const sim = new RunSim(4242);
+  let g = 0, done = [];
+  const kinds = ['ad', 'coin', 'top10', 'top5'];
+  while (g++ < 400000) {
+    if (sim.over) { const k = kinds[done.length]; if (!k) break; sim.revive(k); done.push(k); continue; }
+    const b = sim.body;
+    if (b.canJump && (b.state === S.RESTING || b.vy > 120)) sim.tap(0);
+    sim.step(dt);
+    if (sim.tick % 3 === 0) sim.step(dt);
+  }
+  const rec = sim.exportReplay();
+  const rep = replayRun(rec);
+  ok(rep.ok && rep.revives.top10 && rep.revives.top5 && !rep.revives.top1 && rep.revives.ad && rep.revives.coin, 'replay handles all revive kinds: ' + JSON.stringify(rep.revives));
+  ok(!replayRun({ ...rec, revives: [[1, 'top10'], [2, 'top10']] }).ok, 'the same milestone twice is rejected');
+  ok(!replayRun({ ...rec, revives: [[1, 'bogus']] }).ok, 'unknown revive kind rejected');
+}
+
 // 4. the log is compact and tick-based (no wall-clock anywhere)
 {
   const rec = play(31337, { quitAtM: 800 }).exportReplay();
