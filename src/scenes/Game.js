@@ -428,7 +428,7 @@ export class GameScene extends UIScene {
     // V1.1: once the generic revives are out of the picture, a run that died close to a leaderboard milestone may get an ad revive
     const ms = !canRevive && !canCoinRevive ? Online.milestoneOffer(run) : null;
     const offer = canRevive || canCoinRevive || !!ms;
-    const cardH = offer ? 452 : 382;
+    const cardH = offer ? 478 : 410;
     const top = H / 2 - cardH / 2;
     this.panel(300, cardH);
     this.ovText(W / 2, top + 36, 'GAME OVER', 24, '#ff8fae');
@@ -438,9 +438,9 @@ export class GameScene extends UIScene {
     const earned = this.ovText(W / 2 + 12, top + 202, `+${run.coins}`, 18, '#ffd86a');
     this.addOv(this.add.image(W / 2 + 12 - earned.width / 2 - 16, top + 202, 'coin').setScale(HD));
     // leaderboard line (filled in when the server has verified the run)
-    this.rankText = this.ovText(W / 2, top + 232, '', 13, '#7dffb0', 600);
+    this.rankText = this.ovText(W / 2, top + 234, '', 13, '#7dffb0', 600);
 
-    let y = top + 262;
+    let y = top + 290; // buttons start below the rank line
     if (canRevive) {
       this.button('Revive  (watch ad)', W / 2, y, 244, 54, 'blue', () => this.tryRevive());
       this.ovText(W / 2, y + 38, 'optional. restarting is always free', 11, '#9d92d8', 500);
