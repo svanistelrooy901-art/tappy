@@ -1,0 +1,8 @@
+{
+  "appId": "com.digitalsambal.tappy",
+  "appName": "Tappy",
+  "webDir": "dist",
+  "backgroundColor": "#070518",
+  "android": { "allowMixedContent": false },
+  "server": { "androidScheme": "https" }
+}

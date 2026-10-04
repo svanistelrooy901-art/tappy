@@ -1,0 +1,22 @@
+{
+  "name": "tappy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test": "node test/gen.test.mjs && node test/player.test.mjs && node test/shooter.test.mjs && node test/bot.test.mjs && node test/save.test.mjs && node test/economy.test.mjs && node test/gravity.test.mjs",
+    "cap:sync": "vite build && cap sync android"
+  },
+  "dependencies": {
+    "phaser": "3.90.0",
+    "@capacitor/core": "^7.0.0"
+  },
+  "devDependencies": {
+    "vite": "*",
+    "vite-plugin-singlefile": "*",
+    "@capacitor/cli": "^7.0.0",
+    "@capacitor/android": "^7.0.0"
+  }
+}
