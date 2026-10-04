@@ -3,10 +3,9 @@ import { UIScene, HD, OFFX, OFFY } from './UIScene.js';
 import { SpaceBackground } from '../background.js';
 import { SKINS, ensureSkin, alienKey } from '../art.js';
 import { CFG } from '../config.js';
-import { WorldGen, heightMOf } from '../core/gen.js';
-import { PlayerBody, S } from '../core/player.js';
-import { RunState } from '../core/session.js';
-import { ShooterSystem } from '../core/shooter.js';
+import { heightMOf } from '../core/gen.js';
+import { S } from '../core/player.js';
+import { RunSim } from '../core/runsim.js';
 import { GravityWell } from '../core/gravity.js';
 import { zoneOf } from '../core/physics.js';
 import { PLAT_H, PLAT_TOP, platformKey, uiPanelKey } from '../art_hd.js';
@@ -46,7 +45,6 @@ export class GameScene extends UIScene {
     this.buildPhantom();
     this.lastTapAt = 0;
     this.trailT = 0;
-    this.shooters = new ShooterSystem();
     this.shotSprites = new Map();
     this.phase = 'PLAY';
 
@@ -68,6 +66,10 @@ export class GameScene extends UIScene {
 
     window.__tappy = { scene: this, ad: AdService };
   }
+
+  // the run itself lives in RunSim (pure, shared with the server's replay check); the scene only draws it
+  get camTop() { return this.sim ? this.sim.camTop : 0; }
+  get simT() { return this.sim ? this.sim.simT : 0; }
 
   applyCam() {
     this.cameras.main.setScroll(-OFFX, this.camTop - OFFY);
@@ -161,52 +163,96 @@ export class GameScene extends UIScene {
     for (const arr of [this.platforms, this.hazards, this.coins, this.fx]) arr?.forEach((o) => this.killObj(o));
     this.shotSprites?.forEach((sp) => sp.destroy());
     this.shotSprites?.clear();
-    this.shooters?.reset();
     this.bannerObjs?.forEach((o) => o.destroy());
     this.bannerObjs = null;
     this.hideOverlay();
     AdService.warmUp(); // have the next rewarded ad loaded before the player could ever need it
-    this.platforms = [];
-    this.hazards = [];
-    this.coins = [];
     this.fx = [];
-    this.timers = [];
-    this.simT = 0;
     this.acc = 0;
-    this.camTop = 0;
+    this.sim = null;
     this.applyCam();
 
     const s = seed ?? Math.floor(Math.random() * 2 ** 31);
-    this.run = new RunState(s);
-    this.gen = new WorldGen(this.run.seed);
-    this.gravity = new GravityWell(this.run.seed);
+    this.sim = new RunSim(s, this.simHooks());
+    this.run = this.sim.run;
+    this.gen = this.sim.gen;
+    this.gravity = this.sim.gravity;
+    this.body = this.sim.body;
+    this.platforms = this.sim.platforms;
+    this.hazards = this.sim.hazards;
+    this.coins = this.sim.coins;
+    this.shooters = this.sim.shooters;
     this.pullHintShown = false;
     this.holeX = this.gravity.side < 0 ? 58 : 302;
     this.holeI = 0;
     this.sq = { x: 1, y: 1 };
     this.prevLives = CFG.lives;
 
-    this.body = new PlayerBody({
-      onJump: (d, g) => this.onJump(d, g),
-      onLand: (p, v) => this.onLand(p, v),
-      onBadTransition: (a, b) => console.warn('[player] rejected transition', a, '->', b),
-    });
     if (!this.pSprite) {
       this.aura = this.add.image(0, 0, 'glow').setBlendMode(Phaser.BlendModes.ADD).setTint(parseInt(SKINS[this.skin].body.slice(1), 16)).setDepth(28);
       this.pSprite = this.add.image(0, 0, alienKey(this.skin, 'idle')).setOrigin(0.5, 1).setDepth(30);
     }
 
-    this.spawnRow(this.gen.rows[0]);
-    this.topUpWorld();
-    const start = this.platforms[0];
-    this.body.spawnAt(start, S.SPAWN, 0);
+    // the sim already built the first rows before the scene could attach sprites: dress them now
+    for (const p of this.platforms) this.dressPlatform(p);
+    for (const h of this.hazards) this.dressHazard(h);
+    for (const c of this.coins) this.dressCoin(c);
     this.phase = 'PLAY';
     this.updateHud();
     this.syncSprite(0);
   }
 
+  // What the scene does when the simulation reports something (sound, particles, banners). Nothing here decides play.
+  simHooks() {
+    return {
+      onRow: (row) => {
+        if (this.sim) this.dressRow(row); // rows made after start; the first ones are dressed in startRun
+      },
+      onRemove: (o) => this.killObj(o),
+      onJump: (d, g) => this.onJump(d, g),
+      onLand: (p, v) => this.onLand(p, v),
+      onBadTransition: (a, b) => console.warn('[player] rejected transition', a, '->', b),
+      onRespawn: () => { this.sq = { x: 1, y: 1 }; },
+      onLoseLife: (cause, lives) => {
+        vibrate(40);
+        this.cameras.main.shake(160, 0.012);
+        this.updateHud();
+        if (lives > 0) sfx.hit();
+        else sfx.die();
+      },
+      onEnd: () => {
+        this.phase = 'OVER';
+        this.showGameOver();
+      },
+      onSpitWarn: (h, camTop) => { if (h.y > camTop - 10) sfx.spitWarn(); },
+      onSpitFire: (shot, h, camTop) => {
+        this.shotSprites.set(shot, this.add.image(shot.x, shot.y, 'orb').setScale(HD).setDepth(22));
+        if (h.y > camTop - 10) sfx.spit();
+      },
+      onShotGone: (shot) => this.dropShot(shot),
+      onShotHit: (shot) => {
+        this.puff(shot.x, shot.y, 8, 0xff6a3a, true, 1.3);
+        this.dropShot(shot);
+      },
+      onPullPhase: (ph) => this.onPullPhase(ph),
+      onHeight: (before) => {
+        if (Math.floor(this.run.maxHeightM) !== before) this.heightText.setText(String(Math.floor(this.run.maxHeightM)));
+        if (this.run.inRedZone && !this.run.redZoneShown) this.showRedZone();
+        if (this.run.inBlackZone && !this.run.blackZoneShown) this.showBlackZone();
+        if (this.run.inPhantomZone && !this.run.phantomZoneShown) this.showPhantomZone();
+        else if (this.run.phantomLevel > this.run.phantomLevelShown) this.showHoleStronger();
+      },
+      onCoin: (c) => {
+        this.coinText.setText(String(this.run.coins));
+        sfx.coin();
+        this.puff(c.x, c.y, 6, 0xffd23f, true, 1.2);
+        c.sprite?.destroy();
+      },
+    };
+  }
+
   later(sec, cb) {
-    this.timers.push({ t: this.simT + sec, cb });
+    this.sim.later(sec, cb);
   }
 
   // ------------------------------------------------------------------ world objects
@@ -217,51 +263,35 @@ export class GameScene extends UIScene {
     o.edge?.destroy();
   }
 
-  spawnRow(row) {
+  dressRow(row) {
+    for (const p of row.platforms) this.dressPlatform(p);
+    for (const h of row.hazards) this.dressHazard(h);
+    for (const c of row.coins) this.dressCoin(c);
+  }
+
+  dressPlatform(p) {
     const BZ = CFG.blackZone;
-    for (const p of row.platforms) {
-      const key = platformKey(this, p.theme, p.w);
-      p.sprite = this.add.image(p.x, p.y, key).setOrigin(0.5, PLAT_TOP / PLAT_H).setScale(HD).setDepth(10);
-      // Black Zone: a thin light along the top of every ledge (hidden until the lights go out)
-      p.edge = this.add.image(p.x, p.y + 0.5, 'edge').setBlendMode(Phaser.BlendModes.ADD).setDepth(11).setTint(BZ.edge[p.theme % 3]).setDisplaySize(p.w, 8).setVisible(false);
-      this.platforms.push(p);
-    }
-    for (const h of row.hazards) {
-      h.cx = h.x;
-      h.sprite = this.add.image(h.x, h.y, CFG.hazards[h.kind].tex).setScale(HD).setDepth(20);
-      // Black Zone: glowing outline at the hazard's true hit radius (hidden until the lights go out)
-      h.rim = this.add.image(h.x, h.y, 'rim').setBlendMode(Phaser.BlendModes.ADD).setDepth(21).setTint(BZ.rim[h.kind]).setScale((HD * (h.r + 1.5)) / 20).setVisible(false);
-      if (h.shooter) {
-        h.sprite.setFlipX(h.dir < 0);
-        // dotted lane shown while the Spitter charges, running from the cannon across the screen
-        h.lane = this.add.image(h.x, h.y, 'lane').setScale(HD).setOrigin(h.dir > 0 ? 0 : 1, 0.5).setFlipX(h.dir < 0).setAlpha(0).setDepth(12);
-      }
-      this.hazards.push(h);
-    }
-    for (const c of row.coins) {
-      c.sprite = this.add.image(c.x, c.y, 'coin').setScale(HD).setDepth(15);
-      c.t0 = Math.random() * 6;
-      this.coins.push(c);
+    const key = platformKey(this, p.theme, p.w);
+    p.sprite = this.add.image(p.x, p.y, key).setOrigin(0.5, PLAT_TOP / PLAT_H).setScale(HD).setDepth(10);
+    // Black Zone: a thin light along the top of every ledge (hidden until the lights go out)
+    p.edge = this.add.image(p.x, p.y + 0.5, 'edge').setBlendMode(Phaser.BlendModes.ADD).setDepth(11).setTint(BZ.edge[p.theme % 3]).setDisplaySize(p.w, 8).setVisible(false);
+  }
+
+  dressHazard(h) {
+    const BZ = CFG.blackZone;
+    h.sprite = this.add.image(h.x, h.y, CFG.hazards[h.kind].tex).setScale(HD).setDepth(20);
+    // Black Zone: glowing outline at the hazard's true hit radius (hidden until the lights go out)
+    h.rim = this.add.image(h.x, h.y, 'rim').setBlendMode(Phaser.BlendModes.ADD).setDepth(21).setTint(BZ.rim[h.kind]).setScale((HD * (h.r + 1.5)) / 20).setVisible(false);
+    if (h.shooter) {
+      h.sprite.setFlipX(h.dir < 0);
+      // dotted lane shown while the Spitter charges, running from the cannon across the screen
+      h.lane = this.add.image(h.x, h.y, 'lane').setScale(HD).setOrigin(h.dir > 0 ? 0 : 1, 0.5).setFlipX(h.dir < 0).setAlpha(0).setDepth(12);
     }
   }
 
-  topUpWorld() {
-    while (this.gen.topY > this.camTop - CFG.gen.aheadPx) this.spawnRow(this.gen.genRow());
-  }
-
-  cleanup() {
-    const limit = this.camTop + H + CFG.gen.keepBelowPx;
-    const sweep = (arr) => {
-      for (let i = arr.length - 1; i >= 0; i--) {
-        if (arr[i].y > limit) {
-          this.killObj(arr[i]);
-          arr.splice(i, 1);
-        }
-      }
-    };
-    sweep(this.platforms);
-    sweep(this.hazards);
-    sweep(this.coins);
+  dressCoin(c) {
+    c.sprite = this.add.image(c.x, c.y, 'coin').setScale(HD).setDepth(15);
+    c.t0 = Math.random() * 6; // wobble phase, purely visual
   }
 
   // ------------------------------------------------------------------ input
@@ -280,7 +310,7 @@ export class GameScene extends UIScene {
 
   tryJump(dir) {
     if (this.phase !== 'PLAY') return;
-    this.body.requestJump(dir);
+    this.sim.tap(dir);
   }
 
   // ------------------------------------------------------------------ player events
@@ -320,45 +350,7 @@ export class GameScene extends UIScene {
   }
 
   // ------------------------------------------------------------------ life / death
-  loseLife(cause, hz) {
-    const run = this.run;
-    run.lives = Math.max(0, run.lives - 1);
-    vibrate(40);
-    this.cameras.main.shake(160, 0.012);
-    this.updateHud();
-    if (run.lives > 0) {
-      sfx.hit();
-      if (cause === 'fall') {
-        this.body.kill();
-        this.later(0.45, () => this.respawn(S.SPAWN, CFG.spawnProtect));
-      } else {
-        this.body.applyHit(hz.cx);
-      }
-    } else {
-      sfx.die();
-      this.body.kill();
-      this.later(0.75, () => this.endRun());
-    }
-  }
-
-  // Respawn hovering in the safe corridor, a bit below the middle of the screen.
-  // Never inside a hazard: the corridor is hazard-free by construction.
-  pickRespawn() {
-    const y = this.camTop + H * 0.55;
-    return { x: this.gen.corridorX(y), y, air: true };
-  }
-
-  respawn(kind, protect) {
-    this.body.spawnAt(this.pickRespawn(), kind, protect);
-    this.sq = { x: 1, y: 1 };
-  }
-
-  endRun() {
-    this.phase = 'OVER';
-    this.run.status = 'ended';
-    this.run.endedAt = Date.now();
-    this.showGameOver();
-  }
+  // (lives, hits, falls, the end of the run and revives are decided in RunSim; see simHooks for the reactions)
 
   commitRun() {
     return Save.commitRun(this.run);
@@ -376,11 +368,9 @@ export class GameScene extends UIScene {
     if (cancelled) { this.phase = 'OVER'; this.showGameOver(); return; }
     this.hideOverlay();
     if (res.rewarded && this.run.canNormalRevive) {
-      this.run.normalReviveUsed = true;
-      this.run.lives = CFG.reviveLives;
+      this.sim.revive('ad');
       sfx.revive();
       this.phase = 'PLAY';
-      this.respawn(S.REVIVING, CFG.reviveProtect);
       this.updateHud();
     } else {
       this.phase = 'OVER';
@@ -397,10 +387,9 @@ export class GameScene extends UIScene {
       return;
     }
     this.hideOverlay();
-    this.run.lives = CFG.coinRevive.lives;
+    this.sim.revive('coin');
     sfx.revive();
     this.phase = 'PLAY';
-    this.respawn(S.REVIVING, CFG.reviveProtect);
     this.updateHud();
   }
 
@@ -637,98 +626,7 @@ export class GameScene extends UIScene {
 
   // ------------------------------------------------------------------ fixed-step simulation
   stepSim(dt) {
-    this.simT += dt;
-    const body = this.body;
-
-    for (let i = this.timers.length - 1; i >= 0; i--) {
-      if (this.timers[i].t <= this.simT) {
-        const cb = this.timers[i].cb;
-        this.timers.splice(i, 1);
-        cb();
-      }
-    }
-
-    for (const h of this.hazards) h.cx = h.x + h.amp * Math.sin(h.speed * this.simT + h.phase);
-
-    this.shooters.step(dt, this.camTop, this.hazards, {
-      onWarn: (h) => {
-        if (h.y > this.camTop - 10) sfx.spitWarn();
-      },
-      onFire: (shot, h) => {
-        this.shotSprites.set(shot, this.add.image(shot.x, shot.y, 'orb').setScale(HD).setDepth(22));
-        if (h.y > this.camTop - 10) sfx.spit();
-      },
-      onGone: (shot) => this.dropShot(shot),
-    });
-
-    // Phantom Zone: the black hole's schedule only runs once the zone is entered; it only drags an airborne alien
-    const G = this.gravity;
-    if (this.run.inPhantomZone) {
-      G.level = this.run.phantomLevel;
-      const before = G.phase;
-      G.step(dt);
-      if (G.phase !== before) this.onPullPhase(G.phase);
-    }
-    body.pullVx = this.run.inPhantomZone && body.airborne ? G.vx : 0;
-
-    body.step(dt, this.platforms);
-
-    const live = body.state === S.RESTING || body.airborne;
-    if (live) {
-      const hM = heightMOf(body.y + PL.feet);
-      if (hM > this.run.maxHeightM) {
-        const before = Math.floor(this.run.maxHeightM);
-        this.run.addHeight(hM);
-        if (Math.floor(this.run.maxHeightM) !== before) this.heightText.setText(String(Math.floor(this.run.maxHeightM)));
-        if (this.run.inRedZone && !this.run.redZoneShown) this.showRedZone();
-        if (this.run.inBlackZone && !this.run.blackZoneShown) this.showBlackZone();
-        if (this.run.inPhantomZone && !this.run.phantomZoneShown) this.showPhantomZone();
-        else if (this.run.phantomLevel > this.run.phantomLevelShown) this.showHoleStronger();
-      }
-
-      // coins
-      for (let i = this.coins.length - 1; i >= 0; i--) {
-        const c = this.coins[i];
-        if (Math.hypot(body.x - c.x, body.y - c.y) < 18) {
-          this.run.addPickup();
-          this.coinText.setText(String(this.run.coins));
-          sfx.coin();
-          this.puff(c.x, c.y, 6, 0xffd23f, true, 1.2);
-          c.sprite.destroy();
-          this.coins.splice(i, 1);
-        }
-      }
-
-      // hazards
-      if (body.vulnerable) {
-        let hit = false;
-        for (const h of this.hazards) {
-          if (Math.abs(h.y - body.y) < 60 && Math.hypot(body.x - h.cx, body.y - h.y) < h.r + PL.hurtR) {
-            this.loseLife('hazard', h);
-            hit = true;
-            break;
-          }
-        }
-        if (!hit) {
-          const shot = this.shooters.hit(body.x, body.y, PL.hurtR);
-          if (shot) {
-            this.puff(shot.x, shot.y, 8, 0xff6a3a, true, 1.3);
-            this.dropShot(shot);
-            this.loseLife('hazard', { cx: shot.x });
-          }
-        }
-      }
-
-      // falling below the visible play area
-      if (live && body.y > this.camTop + H + CFG.camera.deathMargin) this.loseLife('fall');
-    }
-
-    // camera only ever follows upward; never oscillates down
-    if (body.state !== S.DEAD) {
-      const target = body.y - H * CFG.camera.followY;
-      if (target < this.camTop) this.camTop += (target - this.camTop) * (1 - Math.exp(-dt * CFG.camera.smooth));
-    }
-    this.topUpWorld();
+    this.sim.step(dt);
   }
 
   // ------------------------------------------------------------------ render
@@ -859,7 +757,6 @@ export class GameScene extends UIScene {
         n++;
       }
       if (n === 12) this.acc = 0;
-      this.cleanup();
     }
 
     this.applyCam();
