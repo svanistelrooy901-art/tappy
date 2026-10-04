@@ -1,0 +1,13 @@
+{
+  "name": "tappy-api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --local",
+    "migrate:local": "wrangler d1 migrations apply tappy --local",
+    "migrate:remote": "wrangler d1 migrations apply tappy --remote",
+    "deploy": "wrangler deploy",
+    "test": "node --no-warnings test/api.test.mjs"
+  },
+  "devDependencies": { "wrangler": "^4" }
+}
