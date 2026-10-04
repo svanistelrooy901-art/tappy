@@ -4,8 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev --local",
-    "migrate:local": "wrangler d1 migrations apply tappy --local",
-    "migrate:remote": "wrangler d1 migrations apply tappy --remote",
+    "migrate:local": "wrangler d1 migrations apply tappy-db --local",
+    "migrate:remote": "wrangler d1 migrations apply tappy-db --remote",
     "deploy": "wrangler deploy",
     "test": "node --no-warnings test/api.test.mjs"
   },
