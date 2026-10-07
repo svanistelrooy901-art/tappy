@@ -19,16 +19,22 @@ jobs:
         with: { node-version: 22 }
       - name: Server tests (replay + API against a local SQLite)
         run: node --no-warnings server/test/api.test.mjs && node --no-warnings test/replay.test.mjs
+      - name: Check secrets
+        run: if [ -z "$CLOUDFLARE_API_TOKEN" ]; then echo "::notice::Cloudflare secrets not set yet - tests ran, deploy skipped"; fi
       - name: Install wrangler
+        if: env.CLOUDFLARE_API_TOKEN != ''
         working-directory: server
         run: npm install --no-audit --no-fund
       - name: Apply database migrations
+        if: env.CLOUDFLARE_API_TOKEN != ''
         working-directory: server
         run: npx wrangler d1 migrations apply tappy-db --remote
       - name: Deploy worker
+        if: env.CLOUDFLARE_API_TOKEN != ''
         working-directory: server
         run: npx wrangler deploy
       - name: Set worker secrets
+        if: env.CLOUDFLARE_API_TOKEN != ''
         working-directory: server
         env:
           SEED_SECRET: ${{ secrets.SEED_SECRET }}
