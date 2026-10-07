@@ -16,9 +16,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
-        with: { node-version: 22 }
+        with: { node-version: 22, check-latest: true }
       - name: Server tests (replay + API against a local SQLite)
-        run: node --no-warnings server/test/api.test.mjs && node --no-warnings test/replay.test.mjs
+        run: node -v && node --experimental-sqlite --no-warnings server/test/api.test.mjs && node --no-warnings test/replay.test.mjs
       - name: Check secrets
         run: if [ -z "$CLOUDFLARE_API_TOKEN" ]; then echo "::notice::Cloudflare secrets not set yet - tests ran, deploy skipped"; fi
       - name: Install wrangler
